@@ -21,7 +21,7 @@ jobs:
             const repo = context.repo.repo;
             const owner = context.repo.owner;
 
-            // Add label
+            // 1. Add the label
             await github.rest.issues.addLabels({
               owner,
               repo,
@@ -29,20 +29,10 @@ jobs:
               labels: ['awaiting-response']
             });
 
-            // Get your project (user-owned, project #8)
-            const { user } = await github.graphql(`
-              query {
-                user(login: "RaimundasR") {
-                  projectV2(number: 8) {
-                    id
-                  }
-                }
-              }
-            `);
+            // 2. Use known Project ID (from GraphQL explorer)
+            const projectId = "PVT_kwHOAhzzDs4A4YZb";
 
-            const projectId = user.projectV2.id;
-
-            // Find project item for the issue
+            // 3. Try to find the issue in the project
             const itemRes = await github.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
@@ -63,12 +53,32 @@ jobs:
               }
             `, { projectId });
 
-            const item = itemRes.node.items.nodes.find(i => i.content?.number === issue.number);
-            if (!item) throw new Error("Issue not found in project");
+            let item = itemRes.node.items.nodes.find(i => i.content?.number === issue.number);
+
+            // 4. If not found, add the issue to the project
+            if (!item) {
+              const added = await github.graphql(`
+                mutation($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: {
+                    projectId: $projectId,
+                    contentId: $contentId
+                  }) {
+                    item {
+                      id
+                    }
+                  }
+                }
+              `, {
+                projectId,
+                contentId: issue.node_id
+              });
+
+              item = { id: added.addProjectV2ItemById.item.id };
+            }
 
             const itemId = item.id;
 
-            // Get "Status" field and find "Awaiting Response" option
+            // 5. Get all fields for the project
             const fieldData = await github.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
@@ -90,13 +100,14 @@ jobs:
               }
             `, { projectId });
 
+            // 6. Find "Status" field and "Awaiting Response" option
             const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
             if (!statusField) throw new Error("Status field not found");
 
             const option = statusField.options.find(opt => opt.name === "Awaiting Response");
             if (!option) throw new Error('"Awaiting Response" option not found');
 
-            // Set project status
+            // 7. Update the field value for this issue
             await github.graphql(`
               mutation($input: UpdateProjectV2ItemFieldValueInput!) {
                 updateProjectV2ItemFieldValue(input: $input) {
@@ -110,6 +121,8 @@ jobs:
                 projectId,
                 itemId,
                 fieldId: statusField.id,
-                value: { singleSelectOptionId: option.id }
+                value: {
+                  singleSelectOptionId: option.id
+                }
               }
             });
