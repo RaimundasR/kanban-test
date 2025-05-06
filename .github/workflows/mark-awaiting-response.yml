@@ -21,7 +21,7 @@ jobs:
             const repo = context.repo.repo;
             const owner = context.repo.owner;
 
-            // 1. Add the label
+            // 1. Add the "awaiting-response" label
             await github.rest.issues.addLabels({
               owner,
               repo,
@@ -29,11 +29,22 @@ jobs:
               labels: ['awaiting-response']
             });
 
-            // 2. Use known Project ID (from GraphQL explorer)
-            const projectId = "PVT_kwHOAhzzDs4A4YZb";
+            // 2. Get the repo-scoped project ID (replace project number if needed)
+            const projectNumber = 1;
+            const { repository } = await github.graphql(`
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  projectV2(number: $number) {
+                    id
+                  }
+                }
+              }
+            `, { owner, repo, number: projectNumber });
 
-            // 3. Try to find the issue in the project
-            const itemRes = await github.graphql(`
+            const projectId = repository.projectV2.id;
+
+            // 3. Check if the issue is already in the project
+            const itemsRes = await github.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
@@ -42,7 +53,6 @@ jobs:
                         id
                         content {
                           ... on Issue {
-                            id
                             number
                           }
                         }
@@ -53,16 +63,13 @@ jobs:
               }
             `, { projectId });
 
-            let item = itemRes.node.items.nodes.find(i => i.content?.number === issue.number);
+            let item = itemsRes.node.items.nodes.find(i => i.content?.number === issue.number);
 
-            // 4. If not found, add the issue to the project
+            // 4. If not in project, add it
             if (!item) {
-              const added = await github.graphql(`
+              const addRes = await github.graphql(`
                 mutation($projectId: ID!, $contentId: ID!) {
-                  addProjectV2ItemById(input: {
-                    projectId: $projectId,
-                    contentId: $contentId
-                  }) {
+                  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
                     item {
                       id
                     }
@@ -72,18 +79,17 @@ jobs:
                 projectId,
                 contentId: issue.node_id
               });
-
-              item = { id: added.addProjectV2ItemById.item.id };
+              item = { id: addRes.addProjectV2ItemById.item.id };
             }
 
             const itemId = item.id;
 
-            // 5. Get all fields for the project
-            const fieldData = await github.graphql(`
+            // 5. Get the "Status" field and the "Awaiting Response" option
+            const fieldRes = await github.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
-                    fields(first: 50) {
+                    fields(first: 20) {
                       nodes {
                         ... on ProjectV2SingleSelectField {
                           id
@@ -100,14 +106,13 @@ jobs:
               }
             `, { projectId });
 
-            // 6. Find "Status" field and "Awaiting Response" option
-            const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
-            if (!statusField) throw new Error("Status field not found");
+            const statusField = fieldRes.node.fields.nodes.find(f => f.name === "Status");
+            if (!statusField) throw new Error("Status field not found in project");
 
-            const option = statusField.options.find(opt => opt.name === "Awaiting Response");
-            if (!option) throw new Error('"Awaiting Response" option not found');
+            const awaitingOption = statusField.options.find(o => o.name === "Awaiting Response");
+            if (!awaitingOption) throw new Error('"Awaiting Response" option not found');
 
-            // 7. Update the field value for this issue
+            // 6. Set the status to "Awaiting Response"
             await github.graphql(`
               mutation($input: UpdateProjectV2ItemFieldValueInput!) {
                 updateProjectV2ItemFieldValue(input: $input) {
@@ -122,7 +127,7 @@ jobs:
                 itemId,
                 fieldId: statusField.id,
                 value: {
-                  singleSelectOptionId: option.id
+                  singleSelectOptionId: awaitingOption.id
                 }
               }
             });
