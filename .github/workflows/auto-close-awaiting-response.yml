@@ -5,6 +5,9 @@ on:
     - cron: '*/1 * * * *'
   workflow_dispatch:
 
+permissions:
+  issues: write
+
 jobs:
   close_issues:
     runs-on: ubuntu-latest
@@ -19,19 +22,15 @@ jobs:
               state: 'open',
               labels: 'awaiting-response'
             });
-
             const now = new Date();
-
             for (const issue of issues.data) {
               const events = await github.rest.issues.listEvents({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number
               });
-
               const lastCommentTime = new Date(issue.updated_at);
               const diffMinutes = (now - lastCommentTime) / 1000 / 60;
-
               if (diffMinutes > 2) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
@@ -39,7 +38,6 @@ jobs:
                   issue_number: issue.number,
                   body: 'Issue automatically closed due to inactivity after awaiting response.'
                 });
-
                 await github.rest.issues.update({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
