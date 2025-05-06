@@ -6,128 +6,36 @@ on:
 
 permissions:
   issues: write
-  repository-projects: write
 
 jobs:
   mark_awaiting:
     runs-on: ubuntu-latest
     steps:
-      - name: Add label and set project status
+      - name: Add awaiting-response label and comment
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const issue = context.payload.issue;
-            const repo = context.repo.repo;
+
+            // Skip if this is a comment on a PR, not an issue
+            if (!issue || issue.pull_request) return;
+
+            const issue_number = issue.number;
             const owner = context.repo.owner;
+            const repo = context.repo.repo;
 
             // 1. Add the "awaiting-response" label
             await github.rest.issues.addLabels({
               owner,
               repo,
-              issue_number: issue.number,
+              issue_number,
               labels: ['awaiting-response']
             });
 
-            // 2. Get the repo-scoped project ID (replace project number if needed)
-            const projectNumber = 8;
-            const { repository } = await github.graphql(`
-              query($owner: String!, $repo: String!, $number: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  projectV2(number: $number) {
-                    id
-                  }
-                }
-              }
-            `, { owner, repo, number: projectNumber });
-
-            const projectId = repository.projectV2.id;
-
-            // 3. Check if the issue is already in the project
-            const itemsRes = await github.graphql(`
-              query($projectId: ID!) {
-                node(id: $projectId) {
-                  ... on ProjectV2 {
-                    items(first: 100) {
-                      nodes {
-                        id
-                        content {
-                          ... on Issue {
-                            number
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            `, { projectId });
-
-            let item = itemsRes.node.items.nodes.find(i => i.content?.number === issue.number);
-
-            // 4. If not in project, add it
-            if (!item) {
-              const addRes = await github.graphql(`
-                mutation($projectId: ID!, $contentId: ID!) {
-                  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
-                    item {
-                      id
-                    }
-                  }
-                }
-              `, {
-                projectId,
-                contentId: issue.node_id
-              });
-              item = { id: addRes.addProjectV2ItemById.item.id };
-            }
-
-            const itemId = item.id;
-
-            // 5. Get the "Status" field and the "Awaiting Response" option
-            const fieldRes = await github.graphql(`
-              query($projectId: ID!) {
-                node(id: $projectId) {
-                  ... on ProjectV2 {
-                    fields(first: 20) {
-                      nodes {
-                        ... on ProjectV2SingleSelectField {
-                          id
-                          name
-                          options {
-                            id
-                            name
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            `, { projectId });
-
-            const statusField = fieldRes.node.fields.nodes.find(f => f.name === "Status");
-            if (!statusField) throw new Error("Status field not found in project");
-
-            const awaitingOption = statusField.options.find(o => o.name === "Awaiting Response");
-            if (!awaitingOption) throw new Error('"Awaiting Response" option not found');
-
-            // 6. Set the status to "Awaiting Response"
-            await github.graphql(`
-              mutation($input: UpdateProjectV2ItemFieldValueInput!) {
-                updateProjectV2ItemFieldValue(input: $input) {
-                  projectV2Item {
-                    id
-                  }
-                }
-              }
-            `, {
-              input: {
-                projectId,
-                itemId,
-                fieldId: statusField.id,
-                value: {
-                  singleSelectOptionId: awaitingOption.id
-                }
-              }
+            // 2. Post a status comment
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: '🔄 Waiting for your response.'
             });
