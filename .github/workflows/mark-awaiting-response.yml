@@ -30,7 +30,7 @@ jobs:
             });
 
             // 2. Get the repo-scoped project ID (replace project number if needed)
-            const projectNumber = 1;
+            const projectNumber = 8;
             const { repository } = await github.graphql(`
               query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
